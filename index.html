@@ -1,0 +1,34 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=600, height=600, initial-scale=1, viewport-fit=cover" />
+  <meta name="description" content="Brick Smash Display, a 600 by 600 gesture-first brick breaker web game for Meta Ray-Ban Display and Neural Band style controls." />
+  <title>Brick Smash Display</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="shell" aria-label="Brick Smash Display game">
+    <section class="hud glass">
+      <div>
+        <p class="eyebrow">Brick Smash Display</p>
+        <h1 id="statusTitle">Ready</h1>
+      </div>
+      <div class="stats" aria-label="Game stats">
+        <article><span>Score</span><strong id="scoreLabel">0</strong></article>
+        <article><span>Lives</span><strong id="livesLabel">3</strong></article>
+        <article><span>Stage</span><strong id="stageLabel">1</strong></article>
+      </div>
+    </section>
+
+    <section class="game-card glass">
+      <canvas id="gameCanvas" width="560" height="392" aria-label="Brick Smash game canvas"></canvas>
+      <div id="flashLayer" class="flash-layer" aria-hidden="true"></div>
+    </section>
+
+    <p id="messageLabel" class="message" aria-live="polite">Slide to aim. Pinch to launch.</p>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
