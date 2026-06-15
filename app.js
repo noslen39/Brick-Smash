@@ -13,8 +13,11 @@ const WIDTH = canvas.width;
 const HEIGHT = canvas.height;
 const BRICK_ROWS = 5;
 const BRICK_COLS = 8;
-const BAND_NUDGE = 34;
-const DRAG_SCALE = 0.9;
+const BAND_NUDGE = 22;
+const DRAG_SCALE = 1.2;
+const CONTROL_SMOOTHING = 0.42;
+const TAP_MAX_MOVEMENT = 14;
+const TAP_MAX_TIME = 520;
 
 const themes = [
   { name: "Glass Garden", a: "rgba(100, 210, 255, 0.22)", b: "rgba(48, 209, 88, 0.18)", c: "rgba(10, 132, 255, 0.2)", hue: 190 },
@@ -25,12 +28,17 @@ const themes = [
 ];
 const powerTypes = ["wide", "slow", "multi", "shield", "laser", "pierce"];
 const audio = { context: null, enabled: true };
-const band = { lastActionAt: 0, repeatMs: 90 };
+const band = {
+  lastActionAt: 0,
+  repeatMs: 32,
+  heldDirection: 0,
+  heldUntil: 0
+};
 
 const state = {
   score: 0, lives: 3, stage: 1, running: false, gameOver: false,
   paddle: { x: WIDTH / 2 - 48, y: HEIGHT - 34, w: 96, h: 13, targetX: WIDTH / 2 - 48, wideTimer: 0, laserTimer: 0 },
-  balls: [], bricks: [], particles: [], powerUps: [], lasers: [], shield: 0, pierceTimer: 0, pointerStart: null, pointerLastX: null
+  balls: [], bricks: [], particles: [], powerUps: [], lasers: [], shield: 0, pierceTimer: 0, pointerStart: null, pointerLastX: null, pointerId: null
 };
 
 function theme() { return themes[(state.stage - 1) % themes.length]; }
@@ -123,17 +131,30 @@ function action() {
 }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function nudgePaddle(direction, amount = BAND_NUDGE) {
-  state.paddle.targetX = clamp(state.paddle.targetX + direction * amount, 6, WIDTH - state.paddle.w - 6);
-  if (state.balls.some((ball) => ball.stuck)) state.paddle.x = state.paddle.targetX;
-  sound("nudge");
+  state.paddle.targetX = clamp(
+    state.paddle.targetX + direction * amount,
+    6,
+    WIDTH - state.paddle.w - 6
+  );
+
+  if (state.balls.some((ball) => ball.stuck)) {
+    state.paddle.x += (state.paddle.targetX - state.paddle.x) * 0.75;
+  }
 }
 function movePaddleTo(clientX) {
   const rect = canvas.getBoundingClientRect();
   const scale = WIDTH / rect.width;
   const x = (clientX - rect.left) * scale;
+
   state.paddle.targetX = clamp(x - state.paddle.w / 2, 6, WIDTH - state.paddle.w - 6);
 }
-function movePaddleBy(deltaX) { state.paddle.targetX = clamp(state.paddle.targetX + deltaX * DRAG_SCALE, 6, WIDTH - state.paddle.w - 6); }
+function movePaddleBy(deltaX) {
+  state.paddle.targetX = clamp(
+    state.paddle.targetX + deltaX * DRAG_SCALE,
+    6,
+    WIDTH - state.paddle.w - 6
+  );
+}
 function burst(x, y, color, amount = 14) {
   for (let i = 0; i < amount; i += 1) {
     const angle = Math.random() * Math.PI * 2;
@@ -243,7 +264,11 @@ function checkStageClear() {
   state.stage += 1; state.score += 500; sound("win"); setMessage("Stage clear. New wall."); applyTheme(); createBricks(); state.powerUps = []; state.lasers = []; resetBall(); syncLabels();
 }
 function update() {
-  state.paddle.x += (state.paddle.targetX - state.paddle.x) * 0.26;
+  if (band.heldDirection !== 0 && performance.now() < band.heldUntil) {
+    nudgePaddle(band.heldDirection, 9);
+  }
+
+  state.paddle.x += (state.paddle.targetX - state.paddle.x) * CONTROL_SMOOTHING;
   if (state.paddle.wideTimer > 0) { state.paddle.wideTimer -= 1; if (state.paddle.wideTimer === 0) { state.paddle.w = 96; state.paddle.targetX = clamp(state.paddle.targetX, 6, WIDTH - state.paddle.w - 6); setMessage("Paddle normal."); } }
   if (state.paddle.laserTimer > 0) state.paddle.laserTimer -= 1;
   if (state.pierceTimer > 0) state.pierceTimer -= 1;
@@ -280,15 +305,83 @@ function draw() {
   ctx.shadowBlur = 0;
 }
 function loop() { if (state.running && !state.gameOver) update(); draw(); requestAnimationFrame(loop); }
-function canBandAct() { const now = performance.now(); if (now - band.lastActionAt < band.repeatMs) return false; band.lastActionAt = now; return true; }
+function canBandAct(command) {
+  const now = performance.now();
+  const repeatMs = command === "left" || command === "right" ? band.repeatMs : 120;
+
+  if (now - band.lastActionAt < repeatMs) return false;
+
+  band.lastActionAt = now;
+  return true;
+}
 function neuralBandCommand(command) {
-  if (!canBandAct()) return;
-  const commands = { left: () => nudgePaddle(-1), right: () => nudgePaddle(1), pinch: action, select: action, tap: action, reset: () => resetGame(true), mute: () => { audio.enabled = !audio.enabled; setMessage(audio.enabled ? "Audio on." : "Audio muted."); } };
+  if (!canBandAct(command)) return;
+
+  const commands = {
+    left: () => {
+      band.heldDirection = -1;
+      band.heldUntil = performance.now() + 130;
+      nudgePaddle(-1);
+    },
+    right: () => {
+      band.heldDirection = 1;
+      band.heldUntil = performance.now() + 130;
+      nudgePaddle(1);
+    },
+    pinch: action,
+    select: action,
+    tap: action,
+    reset: () => resetGame(true),
+    mute: () => {
+      audio.enabled = !audio.enabled;
+      setMessage(audio.enabled ? "Audio on." : "Audio muted.");
+    }
+  };
+
   commands[command]?.();
 }
-function handlePointerDown(event) { state.pointerStart = { x: event.clientX, y: event.clientY, time: performance.now() }; state.pointerLastX = event.clientX; movePaddleTo(event.clientX); }
-function handlePointerMove(event) { if (!state.pointerStart) return; const dx = event.clientX - state.pointerLastX; state.pointerLastX = event.clientX; movePaddleBy(dx); }
-function handlePointerUp(event) { if (!state.pointerStart) return; const dx = event.clientX - state.pointerStart.x; const elapsed = performance.now() - state.pointerStart.time; state.pointerStart = null; state.pointerLastX = null; if (Math.abs(dx) < 18 && elapsed < 700) action(); }
+function handlePointerDown(event) {
+  state.pointerStart = {
+    x: event.clientX,
+    y: event.clientY,
+    time: performance.now()
+  };
+  state.pointerLastX = event.clientX;
+  state.pointerId = event.pointerId;
+
+  if (canvas.setPointerCapture) {
+    canvas.setPointerCapture(event.pointerId);
+  }
+
+  movePaddleTo(event.clientX);
+}
+function handlePointerMove(event) {
+  if (!state.pointerStart) return;
+  if (state.pointerId !== null && event.pointerId !== state.pointerId) return;
+
+  const dx = event.clientX - state.pointerLastX;
+  state.pointerLastX = event.clientX;
+  movePaddleBy(dx);
+}
+function handlePointerUp(event) {
+  if (!state.pointerStart) return;
+  if (state.pointerId !== null && event.pointerId !== state.pointerId) return;
+
+  const dx = event.clientX - state.pointerStart.x;
+  const elapsed = performance.now() - state.pointerStart.time;
+
+  if (canvas.releasePointerCapture && canvas.hasPointerCapture?.(event.pointerId)) {
+    canvas.releasePointerCapture(event.pointerId);
+  }
+
+  state.pointerStart = null;
+  state.pointerLastX = null;
+  state.pointerId = null;
+
+  if (Math.abs(dx) < TAP_MAX_MOVEMENT && elapsed < TAP_MAX_TIME) {
+    action();
+  }
+}
 function handleKey(event) {
   if (event.repeat) return;
   const key = event.key.toLowerCase();
@@ -300,7 +393,11 @@ function handleWheel(event) { event.preventDefault(); neuralBandCommand(event.de
 canvas.addEventListener("pointerdown", handlePointerDown, { passive: true });
 canvas.addEventListener("pointermove", handlePointerMove, { passive: true });
 canvas.addEventListener("pointerup", handlePointerUp, { passive: true });
-canvas.addEventListener("pointercancel", () => { state.pointerStart = null; state.pointerLastX = null; }, { passive: true });
+canvas.addEventListener("pointercancel", () => {
+  state.pointerStart = null;
+  state.pointerLastX = null;
+  state.pointerId = null;
+}, { passive: true });
 canvas.addEventListener("wheel", handleWheel, { passive: false });
 if (launchBtn) {
   launchBtn.addEventListener("click", () => neuralBandCommand("pinch"));
@@ -313,3 +410,4 @@ window.addEventListener("keydown", handleKey);
 window.BrickSmashBand = { left: () => neuralBandCommand("left"), right: () => neuralBandCommand("right"), pinch: () => neuralBandCommand("pinch"), select: () => neuralBandCommand("select"), reset: () => neuralBandCommand("reset"), mute: () => neuralBandCommand("mute") };
 resetGame(true);
 requestAnimationFrame(loop);
+
